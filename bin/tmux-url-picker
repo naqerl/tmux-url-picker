@@ -22,10 +22,13 @@ if [[ "$count" -le 1 ]]; then
   choice="$urls"
 else
   header='Enter: Open URL / Ctrl-Y: Copy to clipboard'
-  tmp="$(mktemp)"
-  printf '%s\n' "$urls" | fzf --prompt='url> ' --height=100% --reverse --no-sort --header="$header" > "$tmp" 2>/dev/null || true
-  choice="$(cat "$tmp")"
-  rm -f "$tmp"
+  choice_file="/tmp/tmux-url-picker.choice.$$"
+  rm -f "$choice_file"
+  printf '%s\n' "$urls" | fzf --prompt='url> ' --height=100% --reverse --no-sort --header="$header" \
+    --bind "enter:execute-silent(printf '%s' {} > '$choice_file')+accept" \
+    2>/dev/null || true
+  choice="$(cat "$choice_file" 2>/dev/null || true)"
+  rm -f "$choice_file"
   [[ -z "$choice" ]] && exit 0
 fi
 
