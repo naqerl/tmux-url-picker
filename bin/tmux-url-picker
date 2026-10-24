@@ -22,7 +22,10 @@ if [[ "$count" -le 1 ]]; then
   choice="$urls"
 else
   header='Enter: Open URL / Ctrl-Y: Copy to clipboard'
-  choice="$(printf '%s\n' "$urls" | fzf --prompt='url> ' --height=100% --reverse --no-sort --header="$header" 2>/dev/null)" || exit 0
+  tmp="$(mktemp)"
+  printf '%s\n' "$urls" | fzf --prompt='url> ' --height=100% --reverse --no-sort --header="$header" > "$tmp" 2>/dev/null || true
+  choice="$(cat "$tmp")"
+  rm -f "$tmp"
   [[ -z "$choice" ]] && exit 0
 fi
 
