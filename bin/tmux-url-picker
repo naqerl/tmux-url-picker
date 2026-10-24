@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pane="${1:-${TMUX_PANE:-}}"
+if [[ -z "$pane" ]]; then
+  pane="$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)"
+fi
+
+urls="$(tmux capture-pane -J -p -S -99999 -t "$pane" 2>/dev/null \
+  | sed -E 's/\x1B\[[0-9;]*[mK]//g' \
+  | grep -oE '(https?|file)://[-a-zA-Z0-9@:%_+.~#?&/=]+[-a-zA-Z0-9@%_+.~#?&/=!]*' \
+  | awk '!seen[$0]++' \
+  | tac)"
+
+if [[ -z "$urls" ]]; then
+  tmux display-message "tmux-url-picker: no URLs found"
+  exit 0
+fi
+
+count="$(printf '%s\n' "$urls" | grep -c .)"
+if [[ "$count" -le 1 ]]; then
+  choice="$urls"
+else
+  header='Enter: Open URL / Ctrl-Y: Copy to clipboard'
+  choice="$(printf '%s\n' "$urls" | fzf --prompt='url> ' --height=100% --reverse --no-sort --header="$header" 2>/dev/null)" || exit 0
+  [[ -z "$choice" ]] && exit 0
+fi
+
+if command -v xdg-open >/dev/null 2>&1 && xdg-open "$choice" >/dev/null 2>&1; then
+  tmux display-message "opened: $choice"
+elif command -v open >/dev/null 2>&1 && open "$choice" >/dev/null 2>&1; then
+  tmux display-message "opened: $choice"
+else
+  tmux set-buffer "$choice" 2>/dev/null || true
+  tty="$(tmux display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null || true)"
+  if [[ -n "$tty" && -w "$tty" ]]; then
+    printf '\033]52;c;%s\007' "$(printf '%s' "$choice" | base64 | tr -d '\n')" > "$tty"
+  fi
+  tmux display-message "copied to clipboard: $choice"
+fi
