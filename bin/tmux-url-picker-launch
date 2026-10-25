@@ -1,19 +1,5 @@
 #!/usr/bin/env bash
+# Key-binding entry. Forwards the pane and the client that pressed the key.
 set -euo pipefail
-pane="${1:-${TMUX_PANE:-}}"
-if [[ -z "$pane" ]]; then
-  pane="$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)"
-fi
-
-urls="$(tmux capture-pane -J -p -S -99999 -t "$pane" 2>/dev/null \
-  | sed -E 's/\x1B\[[0-9;]*[mK]//g' \
-  | grep -oE '(https?|file)://[-a-zA-Z0-9@:%_+.~#?&/=]+[-a-zA-Z0-9@%_+.~#?&/=!]*' \
-  | awk '!seen[$0]++' \
-  | tac)"
-count="$(printf '%s\n' "$urls" | grep -c . || true)"
-
-if [[ "$count" -le 1 ]]; then
-  /home/user/.local/bin/tmux-url-picker "$pane" >/dev/null 2>&1
-else
-  tmux display-popup -E -w 80% -h 60% "/home/user/.local/bin/tmux-url-picker $pane"
-fi
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/tmux-url-picker" "$@"

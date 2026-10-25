@@ -1,49 +1,173 @@
 #!/usr/bin/env bash
+# Extract URLs from a tmux pane. One URL is copied. Several open a menu.
 set -euo pipefail
 
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 pane="${1:-${TMUX_PANE:-}}"
+client="${2:-}"
+
 if [[ -z "$pane" ]]; then
   pane="$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)"
 fi
+if [[ -z "$pane" ]]; then
+  echo "tmux-url-picker: no pane" >&2
+  exit 1
+fi
 
-urls="$(tmux capture-pane -J -p -S -99999 -t "$pane" 2>/dev/null \
-  | sed -E 's/\x1B\[[0-9;]*[mK]//g' \
-  | grep -oE '(https?|file)://[-a-zA-Z0-9@:%_+.~#?&/=!()]+' \
-  | awk '
-      function cnt(s, ch,   n, i) { n = 0; for (i = 1; i <= length(s); i++) if (substr(s, i, 1) == ch) n++; return n }
-      {
-        u = $0
-        while (u ~ /[.,;:!?]$/) u = substr(u, 1, length(u) - 1)
-        while (length(u) > 0) {
-          last = substr(u, length(u), 1)
-          if (last == ")") open = "("
-          else if (last == "}") open = "{"
-          else break
-          if (cnt(u, open) >= cnt(u, last)) break
-          u = substr(u, 1, length(u) - 1)
-        }
-        if (u == "" || seen[u]++) next
-        print u
-      }' \
-  | tac)"
+if [[ -z "$client" ]]; then
+  client="$(tmux list-clients -F '#{client_activity} #{client_name}' 2>/dev/null \
+    | sort -n | awk 'NF { name = $2 } END { print name }' || true)"
+fi
+
+# -e keeps OSC 8 hyperlinks inline, in the same order as the visible text.
+# -J joins wrapped lines. -S - is the whole scrollback ("-99999" is not).
+raw="$(tmux capture-pane -e -J -p -S - -t "$pane" 2>/dev/null || true)"
+# Top to bottom, then reversed so the latest sighting of a URL wins.
+urls="$(printf '%s\n' "$raw" | awk '
+function cnt(s, ch,    n, i) {
+  n = 0
+  for (i = 1; i <= length(s); i++) if (substr(s, i, 1) == ch) n++
+  return n
+}
+function strip(u,    prev, last, open) {
+  do {
+    prev = u
+    while (u ~ /[.,;:!?<>"'"'"'“”’]+$/)
+      u = substr(u, 1, length(u) - 1)
+    while (length(u) > 0) {
+      last = substr(u, length(u), 1)
+      if (last == ")") open = "("
+      else if (last == "]") open = "["
+      else if (last == "}") open = "{"
+      else break
+      if (cnt(u, open) >= cnt(u, last)) break
+      u = substr(u, 1, length(u) - 1)
+    }
+  } while (u != prev && u != "")
+  return u
+}
+function emit_plain(p,    s, u) {
+  s = p
+  while (match(s, /(https?|file):\/\/[^[:space:]<>\\`|]+/)) {
+    u = strip(substr(s, RSTART, RLENGTH))
+    if (u ~ /^(https?|file):\/\/[^[:space:]]/) print u
+    s = substr(s, RSTART + RLENGTH)
+  }
+}
+function skip_osc(s,    i, c) {
+  # s starts at the byte after ESC ]. Return index of the first byte after
+  # BEL or ST (ESC \). 0 if the sequence never ends.
+  i = 1
+  while (i <= length(s)) {
+    c = substr(s, i, 1)
+    if (c == "\007") return i + 1
+    if (c == "\033" && substr(s, i + 1, 1) == "\\") return i + 2
+    i++
+  }
+  return 0
+}
+{
+  s = $0
+  while (length(s) > 0) {
+    if (substr(s, 1, 1) != "\033") {
+      n = index(substr(s, 2), "\033")
+      if (n == 0) { emit_plain(s); break }
+      emit_plain(substr(s, 1, n))
+      s = substr(s, n + 1)
+      continue
+    }
+    if (substr(s, 1, 4) == "\033]8;") {
+      payload = substr(s, 5)
+      end = skip_osc(payload)
+      if (end == 0) break
+      # end is the first byte after BEL (1 byte) or ST (ESC \). Drop the terminator.
+      if (substr(payload, end - 1, 1) == "\\")
+        content = substr(payload, 1, end - 3)
+      else
+        content = substr(payload, 1, end - 2)
+      semi = index(content, ";")
+      if (semi > 0) {
+        uri = substr(content, semi + 1)
+        if (uri != "") print uri
+      }
+      s = substr(payload, end)
+      continue
+    }
+    if (substr(s, 2, 1) == "]") {
+      end = skip_osc(substr(s, 3))
+      if (end == 0) break
+      s = substr(s, 2 + end)
+      continue
+    }
+    if (substr(s, 2, 1) == "[") {
+      i = 3
+      while (i <= length(s)) {
+        c = substr(s, i, 1)
+        if (c >= "@" && c <= "~") { i++; break }
+        i++
+      }
+      s = substr(s, i)
+      continue
+    }
+    s = substr(s, 3)
+  }
+}
+' | tac | awk 'NF && !seen[$0]++' || true)"
+
+if [[ "${TMUX_URL_PICKER_PRINT:-0}" == "1" ]]; then
+  [[ -n "$urls" ]] && printf '%s\n' "$urls"
+  exit 0
+fi
+
+msg() {
+  local text="${1//#/##}"
+  if [[ -n "$client" ]]; then
+    tmux display-message -c "$client" -- "$text" 2>/dev/null || true
+  else
+    tmux display-message -- "$text" 2>/dev/null || true
+  fi
+}
 
 if [[ -z "$urls" ]]; then
-  tmux display-message "tmux-url-picker: no URLs found"
+  msg "tmux-url-picker: no URLs found"
   exit 0
 fi
 
-# Debug helper: TMUX_URL_PICKER_PRINT=1 prints the detected URLs instead of a menu.
-if [[ "${TMUX_URL_PICKER_PRINT:-0}" == "1" ]]; then
-  printf '%s\n' "$urls"
-  exit 0
+count="$(printf '%s\n' "$urls" | awk 'NF { n++ } END { print n + 0 }')"
+if [[ "$count" -le 1 ]]; then
+  exec "$here/tmux-url-open" ${client:+--client "$client"} -- "$urls"
 fi
 
-args=()
-i=1
+# The menu command is format-expanded, so the URL stays in a named buffer and
+# the command only carries an index. # in a label is written as ##.
+buf="urlpick${pane//[^A-Za-z0-9]/}"
+tmux set-buffer -b "$buf" -- "$urls"
+
+keys=(1 2 3 4 5 6 7 8 9 0 a b c d e f g h i l m n o p r s t u v w x y z)
+items=()
+i=0
 while IFS= read -r u; do
   [[ -z "$u" ]] && continue
-  args+=("$u" "$i" "run-shell \"/home/user/.local/bin/tmux-url-open '$u' $pane\"")
-  i=$((i+1))
+  i=$((i + 1))
+  key=""
+  if (( i <= ${#keys[@]} )); then
+    key="${keys[i - 1]}"
+  fi
+  label="${u//#/##}"
+  cmd="run-shell -b '$here/tmux-url-open --line $i --buffer $buf"
+  if [[ -n "$client" ]]; then
+    cmd="$cmd --client $client"
+  fi
+  cmd="$cmd'"
+  items+=("$label" "$key" "$cmd")
 done <<< "$urls"
 
-tmux display-menu -T "URLs" -x C -y C "${args[@]}"
+menu=(display-menu -T "URLs" -x C -y C -C 0)
+if [[ -n "$client" ]]; then
+  menu+=(-c "$client")
+fi
+if ! tmux "${menu[@]}" "${items[@]}"; then
+  msg "tmux-url-picker: could not open menu"
+  exit 1
+fi

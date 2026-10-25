@@ -1,30 +1,71 @@
 #!/usr/bin/env bash
-# tmux-url-open <url> [pane_id]
+# Copy a URL into the tmux paste buffer and the terminal clipboard.
+# tmux-url-open [--client CLIENT] [--line N --buffer NAME] [--] [URL]
 set -euo pipefail
-url="${1:?url required}"
-pane="${2:-${TMUX_PANE:-}}"
 
-# Always keep a tmux buffer copy (paste-able with prefix + ]).
-tmux set-buffer -- "$url" 2>/dev/null || true
+client=""
+line=""
+buffer=""
+url=""
 
-# Push to the system clipboard through the terminal (OSC 52) on the pane's tty.
-if [[ -z "$pane" ]]; then
-  pane="$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)"
-fi
-tty=""
-if [[ -n "$pane" ]]; then
-  tty="$(tmux display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null || true)"
-fi
-if [[ -z "$tty" || ! -w "$tty" ]]; then
-  tty="$(tmux display-message -p '#{client_tty}' 2>/dev/null || true)"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --client)
+      client="${2:-}"
+      shift 2
+      ;;
+    --line)
+      line="${2:-}"
+      shift 2
+      ;;
+    --buffer)
+      buffer="${2:-}"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "tmux-url-open: unknown option $1" >&2
+      exit 2
+      ;;
+    *)
+      url="$1"
+      shift
+      ;;
+  esac
+done
+if [[ -z "$url" && $# -gt 0 ]]; then
+  url="$1"
 fi
 
-if [[ -n "$tty" && -w "$tty" ]]; then
-  printf '\033]52;c;%s\007' "$(printf '%s' "$url" | base64 -w0)" > "$tty" || true
+if [[ -n "$line" ]]; then
+  if [[ -z "$buffer" ]]; then
+    echo "tmux-url-open: --line needs --buffer" >&2
+    exit 2
+  fi
+  url="$(tmux show-buffer -b "$buffer" | awk -v n="$line" 'NR == n { print; exit }')"
 fi
 
-if command -v xdg-open >/dev/null 2>&1 && xdg-open "$url" >/dev/null 2>&1; then
-  tmux display-message "opened: $url"
+if [[ -z "$url" ]]; then
+  exit 0
+fi
+
+# Paste buffer for prefix + ]. Argument is not format-expanded.
+tmux set-buffer -- "$url"
+
+# -w asks tmux to emit OSC 52 on the attached client. Writing the sequence to
+# the pane tty never reaches that client: tmux owns the pane pty.
+if [[ -n "$client" ]]; then
+  tmux set-buffer -w -t "$client" -- "$url" 2>/dev/null || true
 else
-  tmux display-message "copied: $url"
+  tmux set-buffer -w -- "$url" 2>/dev/null || true
+fi
+
+text="copied: ${url//#/##}"
+if [[ -n "$client" ]]; then
+  tmux display-message -c "$client" -- "$text" 2>/dev/null || true
+else
+  tmux display-message -- "$text" 2>/dev/null || true
 fi
