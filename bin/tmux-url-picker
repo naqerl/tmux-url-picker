@@ -8,12 +8,33 @@ fi
 
 urls="$(tmux capture-pane -J -p -S -99999 -t "$pane" 2>/dev/null \
   | sed -E 's/\x1B\[[0-9;]*[mK]//g' \
-  | grep -oE '(https?|file)://[-a-zA-Z0-9@:%_+.~#?&/=]+[-a-zA-Z0-9@%_+.~#?&/=!]*' \
-  | awk '!seen[$0]++' \
+  | grep -oE '(https?|file)://[-a-zA-Z0-9@:%_+.~#?&/=!()]+' \
+  | awk '
+      function cnt(s, ch,   n, i) { n = 0; for (i = 1; i <= length(s); i++) if (substr(s, i, 1) == ch) n++; return n }
+      {
+        u = $0
+        while (u ~ /[.,;:!?]$/) u = substr(u, 1, length(u) - 1)
+        while (length(u) > 0) {
+          last = substr(u, length(u), 1)
+          if (last == ")") open = "("
+          else if (last == "}") open = "{"
+          else break
+          if (cnt(u, open) >= cnt(u, last)) break
+          u = substr(u, 1, length(u) - 1)
+        }
+        if (u == "" || seen[u]++) next
+        print u
+      }' \
   | tac)"
 
 if [[ -z "$urls" ]]; then
   tmux display-message "tmux-url-picker: no URLs found"
+  exit 0
+fi
+
+# Debug helper: TMUX_URL_PICKER_PRINT=1 prints the detected URLs instead of a menu.
+if [[ "${TMUX_URL_PICKER_PRINT:-0}" == "1" ]]; then
+  printf '%s\n' "$urls"
   exit 0
 fi
 
