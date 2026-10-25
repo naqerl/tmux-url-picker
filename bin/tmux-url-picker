@@ -13,48 +13,16 @@ urls="$(tmux capture-pane -J -p -S -99999 -t "$pane" 2>/dev/null \
   | tac)"
 
 if [[ -z "$urls" ]]; then
-  echo "no urls for pane $pane" >> /tmp/tmux-url-picker.log
   tmux display-message "tmux-url-picker: no URLs found"
   exit 0
 fi
 
-echo "pane=$pane count=$(printf '%s\n' "$urls" | grep -c .) urls=$urls" >> /tmp/tmux-url-picker.log
+args=()
+i=1
+while IFS= read -r u; do
+  [[ -z "$u" ]] && continue
+  args+=("$u" "$i" "run-shell \"/home/user/.local/bin/tmux-url-open $u\"")
+  i=$((i+1))
+done <<< "$urls"
 
-count="$(printf '%s\n' "$urls" | grep -c .)"
-if [[ "$count" -le 1 ]]; then
-  choice="$urls"
-else
-  header='Enter: Open URL / Ctrl-Y: Copy to clipboard'
-  choice_file="/tmp/tmux-url-picker.choice.$$"
-  rm -f "$choice_file"
-  printf '%s\n' "$urls" | fzf --prompt='url> ' --height=100% --reverse --no-sort --header="$header" \
-    --bind "enter:execute-silent(printf '%s' {} > '$choice_file')+accept" \
-    2>/dev/null || true
-  choice="$(cat "$choice_file" 2>/dev/null || true)"
-  rm -f "$choice_file"
-  if [[ -z "$choice" ]]; then
-    # Fallback: native tmux menu (reliable even if fzf TUI fails to render).
-    args=()
-    i=1
-    while IFS= read -r u; do
-      [[ -z "$u" ]] && continue
-      args+=("$u" "$i" "run-shell \"/home/user/.local/bin/tmux-url-open $u\"")
-      i=$((i+1))
-    done <<< "$urls"
-    tmux display-menu -T "URLs" -x C -y C "${args[@]}"
-    exit 0
-  fi
-fi
-
-if command -v xdg-open >/dev/null 2>&1 && xdg-open "$choice" >/dev/null 2>&1; then
-  tmux display-message "opened: $choice"
-elif command -v open >/dev/null 2>&1 && open "$choice" >/dev/null 2>&1; then
-  tmux display-message "opened: $choice"
-else
-  tmux set-buffer "$choice" 2>/dev/null || true
-  tty="$(tmux display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null || true)"
-  if [[ -n "$tty" && -w "$tty" ]]; then
-    printf '\033]52;c;%s\007' "$(printf '%s' "$choice" | base64 | tr -d '\n')" > "$tty"
-  fi
-  tmux display-message "copied to clipboard: $choice"
-fi
+tmux display-menu -T "URLs" -x C -y C "${args[@]}"
