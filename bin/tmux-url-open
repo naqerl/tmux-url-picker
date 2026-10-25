@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+choice="$1"
+if command -v xdg-open >/dev/null 2>&1 && xdg-open "$choice" >/dev/null 2>&1; then
+  tmux display-message "opened: $choice"
+elif command -v open >/dev/null 2>&1 && open "$choice" >/dev/null 2>&1; then
+  tmux display-message "opened: $choice"
+else
+  tmux set-buffer "$choice" 2>/dev/null || true
+  tmux display-message "copied to clipboard: $choice"
+fi
