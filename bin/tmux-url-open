@@ -1,11 +1,30 @@
 #!/usr/bin/env bash
+# tmux-url-open <url> [pane_id]
 set -euo pipefail
-choice="$1"
-if command -v xdg-open >/dev/null 2>&1 && xdg-open "$choice" >/dev/null 2>&1; then
-  tmux display-message "opened: $choice"
-elif command -v open >/dev/null 2>&1 && open "$choice" >/dev/null 2>&1; then
-  tmux display-message "opened: $choice"
+url="${1:?url required}"
+pane="${2:-${TMUX_PANE:-}}"
+
+# Always keep a tmux buffer copy (paste-able with prefix + ]).
+tmux set-buffer -- "$url" 2>/dev/null || true
+
+# Push to the system clipboard through the terminal (OSC 52) on the pane's tty.
+if [[ -z "$pane" ]]; then
+  pane="$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)"
+fi
+tty=""
+if [[ -n "$pane" ]]; then
+  tty="$(tmux display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null || true)"
+fi
+if [[ -z "$tty" || ! -w "$tty" ]]; then
+  tty="$(tmux display-message -p '#{client_tty}' 2>/dev/null || true)"
+fi
+
+if [[ -n "$tty" && -w "$tty" ]]; then
+  printf '\033]52;c;%s\007' "$(printf '%s' "$url" | base64 -w0)" > "$tty" || true
+fi
+
+if command -v xdg-open >/dev/null 2>&1 && xdg-open "$url" >/dev/null 2>&1; then
+  tmux display-message "opened: $url"
 else
-  tmux set-buffer "$choice" 2>/dev/null || true
-  tmux display-message "copied to clipboard: $choice"
+  tmux display-message "copied: $url"
 fi
